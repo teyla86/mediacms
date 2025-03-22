@@ -793,3 +793,17 @@ def get_alphanumeric_only(string):
     """
     string = "".join([char for char in string if char.isalnum()])
     return string.lower()
+
+
+def verify_profile_eligibility(width, height, profile_resolution):
+    """verifies a video file to be eligibile for an encoding profile by
+    scaling the video height up to a widescreen ratio before comparing
+    it with the 16-by-9 profile resolution height"""
+    current_ar = round(width / height, 2)
+    if current_ar >= 1.78:  # 1.78 being 16/9; video AR being larger suggests cinemascope AR
+        scaled_height = round((width / 16) * 9, 0)
+        if -10 <= (scaled_height - profile_resolution) <= 10:
+            return True
+        return False
+    else:
+        return False

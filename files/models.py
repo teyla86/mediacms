@@ -480,6 +480,7 @@ class Media(models.Model):
                 self.media_type = "video"
                 self.duration = int(round(float(ret.get("video_duration", 0))))
                 self.video_height = int(ret.get("video_height"))
+                self.video_width = int(ret.get("video_width"))
                 if ret.get("video_info", {}).get("codec_name", {}) in ["mjpeg"]:
                     # best guess that this is an audio file with a thumbnail
                     # in other cases, it is not (eg it can be an AVI file)
@@ -602,7 +603,11 @@ class Media(models.Model):
                 if profile.extension != "gif":
                     if self.video_height and self.video_height < profile.resolution:
                         if profile.resolution not in settings.MINIMUM_RESOLUTIONS_TO_ENCODE:
-                            continue
+                            if not self.video_width or not \
+                               helpers.verify_profile_eligibility(self.video_width,
+                                                                  self.video_height,
+                                                                  profile.resolution):
+                                continue
                 encoding = Encoding(media=self, profile=profile)
                 encoding.save()
                 enc_url = settings.SSL_FRONTEND_HOST + encoding.get_absolute_url()
