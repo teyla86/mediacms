@@ -581,9 +581,6 @@ class Media(models.Model):
             profiles = EncodeProfile.objects.filter(active=True)
         profiles = list(profiles)
 
-        if not self.media_type:
-            self.set_media_type()
-
         from . import tasks
 
         # attempt to break media file in chunks
