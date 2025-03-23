@@ -6,7 +6,7 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.postgres.search import SearchQuery
 from django.core.mail import EmailMessage
 from django.db.models import Q
-from django.http import HttpResponseRedirect
+from django.http import HttpResponse, HttpResponseRedirect
 from django.shortcuts import get_object_or_404, render
 from drf_yasg import openapi as openapi
 from drf_yasg.utils import swagger_auto_schema
@@ -32,7 +32,7 @@ from cms.permissions import (
 )
 from users.models import User
 
-from .forms import ContactForm, MediaForm, SubtitleForm
+from .forms import ContactForm, EditSubtitleForm, MediaForm, SubtitleForm
 from .frontend_translations import translate_string
 from .helpers import clean_query, get_alphanumeric_only, produce_ffmpeg_commands
 from .methods import (
@@ -54,6 +54,7 @@ from .models import (
     Media,
     Playlist,
     PlaylistMedia,
+    Subtitle,
     Tag,
 )
 from .serializers import (
@@ -105,12 +106,68 @@ def add_subtitle(request):
         form = SubtitleForm(media, request.POST, request.FILES)
         if form.is_valid():
             subtitle = form.save()
-            messages.add_message(request, messages.INFO, translate_string(request.LANGUAGE_CODE, "Subtitle was added"))
+            new_subtitle = Subtitle.objects.filter(id=subtitle.id).first()
+            try:
+                new_subtitle.convert_to_srt()
+                messages.add_message(request, messages.INFO, "Subtitle was added!")
+                return HttpResponseRedirect(subtitle.media.get_absolute_url())
+            except:  # noqa: E722
+                new_subtitle.delete()
+                error_msg = "Invalid subtitle format. Use SubRip (.srt) or WebVTT (.vtt) files."
+                form.add_error("subtitle_file", error_msg)
 
-            return HttpResponseRedirect(subtitle.media.get_absolute_url())
     else:
         form = SubtitleForm(media_item=media)
-    return render(request, "cms/add_subtitle.html", {"form": form})
+    subtitles = media.subtitles.all()
+    context = {"media": media, "form": form, "subtitles": subtitles}
+    return render(request, "cms/add_subtitle.html", context)
+
+
+@login_required
+def edit_subtitle(request):
+    subtitle_id = request.GET.get("id", "").strip()
+    action = request.GET.get("action", "").strip()
+    if not subtitle_id:
+        return HttpResponseRedirect("/")
+    subtitle = Subtitle.objects.filter(id=subtitle_id).first()
+
+    if not subtitle:
+        return HttpResponseRedirect("/")
+
+    if not (request.user == subtitle.user or is_mediacms_editor(request.user) or is_mediacms_manager(request.user)):
+        return HttpResponseRedirect("/")
+
+    context = {"subtitle": subtitle, "action": action}
+
+    if action == "download":
+        response = HttpResponse(subtitle.subtitle_file.read(), content_type="text/vtt")
+        filename = subtitle.subtitle_file.name.split("/")[-1]
+
+        if not filename.endswith(".vtt"):
+            filename = f"{filename}.vtt"
+
+        response["Content-Disposition"] = f"attachment; filename={filename}"  # noqa
+
+        return response
+
+    if request.method == "GET":
+        form = EditSubtitleForm(subtitle)
+        context["form"] = form
+    elif request.method == "POST":
+        confirm = request.GET.get("confirm", "").strip()
+        if confirm == "true":
+            messages.add_message(request, messages.INFO, "Subtitle was deleted")
+            redirect_url = subtitle.media.get_absolute_url()
+            subtitle.delete()
+            return HttpResponseRedirect(redirect_url)
+        form = EditSubtitleForm(subtitle, request.POST)
+        subtitle_text = form.data["subtitle"]
+        with open(subtitle.subtitle_file.path, "w") as ff:
+            ff.write(subtitle_text)
+
+        messages.add_message(request, messages.INFO, "Subtitle was edited")
+        return HttpResponseRedirect(subtitle.media.get_absolute_url())
+    return render(request, "cms/edit_subtitle.html", context)
 
 
 def categories(request):
@@ -675,6 +732,9 @@ class MediaActions(APIView):
     def get(self, request, friendly_token, format=None):
         # show date and reason for each time media was reported
         media = self.get_object(friendly_token)
+        if not (request.user == media.user or is_mediacms_editor(request.user) or is_mediacms_manager(request.user)):
+            return Response({"detail": "not allowed"}, status=status.HTTP_400_BAD_REQUEST)
+
         if isinstance(media, Response):
             return media
 
@@ -928,9 +988,10 @@ class PlaylistDetail(APIView):
 
         serializer = PlaylistDetailSerializer(playlist, context={"request": request})
 
-        playlist_media = PlaylistMedia.objects.filter(playlist=playlist).prefetch_related("media__user")
+        playlist_media = PlaylistMedia.objects.filter(playlist=playlist, media__state="public").prefetch_related("media__user")
 
         playlist_media = [c.media for c in playlist_media]
+
         playlist_media_serializer = MediaSerializer(playlist_media, many=True, context={"request": request})
         ret = serializer.data
         ret["playlist_media"] = playlist_media_serializer.data
@@ -1195,7 +1256,7 @@ class CommentList(APIView):
     def get(self, request, format=None):
         pagination_class = api_settings.DEFAULT_PAGINATION_CLASS
         paginator = pagination_class()
-        comments = Comment.objects.filter()
+        comments = Comment.objects.filter(media__state="public").order_by("-add_date")
         comments = comments.prefetch_related("user")
         comments = comments.prefetch_related("media")
         params = self.request.query_params
