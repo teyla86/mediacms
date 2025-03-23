@@ -537,6 +537,7 @@ def get_base_ffmpeg_command(
         filters.append("yadif")
 
     target_width = round(target_height * 16 / 9)
+
     scale_filter_opts = [
         f"if(lt(iw\\,ih)\\,{target_height}\\,{target_width})",  # noqa
         f"if(lt(iw\\,ih)\\,{target_width}\\,{target_height})",  # noqa
@@ -544,6 +545,8 @@ def get_base_ffmpeg_command(
         "force_divisible_by=2",
         "flags=lanczos",
     ]
+    if round(target_width / target_height, 2) != 1.78:  # check for widescreen and add letterbox padding if not widescreen
+        scale_filter_opts.append(f"pad={target_width}:{target_height}:({target_width}-iw*min({target_width}/iw\\,{target_height}/ih))/2:({target_height}-ih*min({target_width}/iw\\,{target_height}/ih))/2")
     scale_filter_str = "scale=" + ":".join(scale_filter_opts)
     filters.append(scale_filter_str)
 
@@ -727,7 +730,10 @@ def produce_ffmpeg_commands(media_file, media_info, resolution, codec, output_fi
 
     if media_info.get("video_height") < resolution:
         if resolution not in [240, 360]:  # always get these two
-            return False
+            if not verify_profile_eligibility(media_info.get("video_width"),  # allow videos with wider ARs than 16/9
+                                              media_info.get("video_height"),
+                                              resolution):
+                return False
 
     #    if codec == "h264_baseline":
     #        target_fps = 25
