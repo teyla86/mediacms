@@ -570,6 +570,12 @@ class Media(models.Model):
         tasks.produce_sprite_from_video.delay(self.friendly_token)
         return True
 
+    def ensure_video_width(self):
+        if 'video_width' in self.__dict__.keys():
+            return
+        ret = helpers.media_file_info(self.media_file.path)
+        self.video_width = ret.get('video_width')
+
     def encode(self, profiles=[], force=True, chunkize=True):
         """Start video encoding tasks
         Create a task per EncodeProfile object, after checking height
@@ -599,14 +605,14 @@ class Media(models.Model):
             profiles = [p.id for p in profiles]
             tasks.chunkize_media.delay(self.friendly_token, profiles, force=force)
         else:
+            self.ensure_video_width()
             for profile in profiles:
                 if profile.extension != "gif":
                     if self.video_height and self.video_height < profile.resolution:
                         if profile.resolution not in settings.MINIMUM_RESOLUTIONS_TO_ENCODE:
-                            if not self.video_width or not \
-                               helpers.verify_profile_eligibility(self.video_width,
-                                                                  self.video_height,
-                                                                  profile.resolution):
+                            if not helpers.verify_profile_eligibility(self.video_width,
+                                                                      self.video_height,
+                                                                      profile.resolution):
                                 continue
                 encoding = Encoding(media=self, profile=profile)
                 encoding.save()
