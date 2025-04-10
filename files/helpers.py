@@ -805,6 +805,8 @@ def verify_profile_eligibility(width, height, profile_resolution):
     """verifies a video file to be eligibile for an encoding profile by
     scaling the video height up to a widescreen ratio before comparing
     it with the 16-by-9 profile resolution height"""
+    if profile_resolution in [240, 360]:  # always get these two
+        return True
     current_ar = round(width / height, 2)
     if current_ar >= 1.78:  # 1.78 being 16/9; video AR being larger suggests cinemascope AR
         scaled_height = round((width / 16) * 9, 0)
