@@ -26,11 +26,13 @@ from .exceptions import VideoEncodingError
 from .helpers import (
     calculate_seconds,
     create_temp_file,
+    equalise_volume,
     get_file_name,
     get_file_type,
     media_file_info,
     produce_ffmpeg_commands,
     produce_friendly_token,
+    rm_dir,
     rm_file,
     run_command,
 )
@@ -150,6 +152,96 @@ class EncodingTask(Task):
         except BaseException:
             pass
         return False
+
+
+@task(
+    name="equalise",
+    base=EncodingTask,
+    bind=True,
+    queue="long_tasks",
+    soft_time_limit=settings.CELERY_SOFT_TIME_LIMIT,
+)
+def equalise(
+    self,
+    friendly_token,
+    delta
+):
+    """Process the original media file and its directories of hls .ts files
+    to adjust their volume to match the target volume configured in settings"""
+
+    try:
+        media = Media.objects.get(friendly_token=friendly_token)
+    except BaseException:
+        return False
+
+    logger.info(f"Equalising started; media: {media.title} ({media.id}), delta: {delta}")
+
+    all_files = [media.media_file.path]
+    if media.hls_file:
+        hls_dirs = media.get_active_hls_file_dirs()
+        all_files = all_files + [d.file for d in hls_dirs.values()]
+
+    TEMP_DIR = 'temp'
+
+    for file_path in all_files:
+
+        paths = []
+
+        if os.path.isdir(file_path):
+            for el in os.listdir(file_path):
+                if '.ts' in el:
+                    paths.append(os.path.join(file_path, el))
+        else:
+            paths.append(file_path)
+
+        file_dir = "/".join(paths[0].split('/')[:-1])
+        temp_dir = os.path.join(file_dir, TEMP_DIR)
+        try:
+            os.mkdir(temp_dir)
+        except FileExistsError:
+            pass
+        if not os.path.isdir(temp_dir):
+            return False
+
+        def make_temp_path(path):
+            file_name, file_ext = os.path.splitext(path)
+            return os.path.join(file_dir, TEMP_DIR, get_file_name(file_name) + file_ext)
+
+        path_pairs = {old_path: make_temp_path(old_path) for old_path in paths}
+
+        failed_files = []
+        equalised_files = []
+
+        def make_error(ret):
+            if 'error' not in ret.keys():
+                return ret
+            lines = ret['error'].split('\n')
+            cut_line = [line for line in lines if 'encoder' in line]
+            if not cut_line or len(cut_line) > 1 or cut_line[0] == lines[-1]:
+                return ret
+            error = lines[lines.index(cut_line[0]) + 1:]
+            return ', '.join(error)
+
+        for old_path, new_path in path_pairs.items():
+            ret = equalise_volume(old_path, new_path, delta)
+            if not isinstance(ret, bool):
+                path_pairs[old_path] = None
+                failed_files.append((old_path, make_error(ret)))
+
+        for old_path, new_path in path_pairs.items():
+            if new_path:
+                shutil.move(new_path, old_path)
+                equalised_files.append(old_path)
+
+        rm_dir(temp_dir)
+
+        if failed_files:
+            logger.warning(f"""Equalising failed on following file or files: {print(failed_files)}""")
+
+        if equalised_files:
+            logger.info(f"""Equalised following file or files: {print(equalised_files)}""")
+
+    return True
 
 
 @task(

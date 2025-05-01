@@ -45,7 +45,12 @@ class MediaAdmin(admin.ModelAdmin):
         for m in queryset:
             m.encode(force=False)
 
-    actions = [generate_missing_encodings]
+    @admin.action(description="Equalise volume", permissions=["change"])
+    def equalise(modeladmin, request, queryset):
+        for m in queryset:
+            m.equalise_volume()
+
+    actions = [generate_missing_encodings, equalise]
     get_comments_count.short_description = "Comments count"
 
 

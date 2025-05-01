@@ -673,6 +673,42 @@ class Media(models.Model):
 
         return True
 
+    from django.core.files import File
+
+    def get_active_hls_file_dirs(self):
+        """locate directories containing active hls segments"""
+        encs = sorted([e.profile.resolution for e in self.encodings.all()])
+        parent_path = "/".join(self.hls_file.split('/')[:-1])
+        with open(self.hls_file, 'r') as m3u8:
+            lines = m3u8.readlines()
+            stream_lines = [line for line in lines if '#EXT-X-STREAM-INF' in line]
+            path_lines = [lines[lines.index(line) + 1] for line in stream_lines]
+        res = {}
+        if stream_lines:
+            resolutions = sorted([int(line.split('x')[-1]) for line in stream_lines])
+            if not len(encs) == len(resolutions):
+                return False
+            for line in stream_lines:
+                this_enc = [str(encs[resolutions.index(r)]) for r in resolutions if str(r) in line][0]
+                res[this_enc] = File(parent_path + '/' + path_lines[stream_lines.index(line)].split('/')[0], this_enc)
+        return res
+
+    def equalise_volume(self):
+        """triggered through admin action; adjusts the volume of video media
+        to target volume defined in settings"""
+        if not helpers.get_file_type(self.media_file.path) == 'video':
+            return False
+        original_volume, volume_delta = helpers.get_original_volume(self.media_file.path)
+        if original_volume == settings.TARGET_VOLUME:
+            return True
+        elif not all([isinstance(original_volume, float), isinstance(volume_delta, float)]):
+            return False
+
+        from . import tasks
+
+        tasks.equalise.apply_async(args=[self.friendly_token, volume_delta], kwargs={}, priority=0)
+        return True
+
     @property
     def encodings_info(self, full=False):
         """Property used on serializers"""
