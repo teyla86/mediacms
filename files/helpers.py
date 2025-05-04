@@ -35,7 +35,7 @@ KEYFRAME_DISTANCE_MIN = 2
 # see https://trac.ffmpeg.org/wiki/Encode/H.264
 X26x_PRESET = "medium"  # "medium"
 X265_PRESET = "medium"
-X26x_PRESET_BIG_HEIGHT = "faster"
+X26x_PRESET_BIG_HEIGHT = "medium"
 
 # VP9_SPEED = 1  # between 0 and 4, lower is slower
 VP9_SPEED = 2
@@ -55,8 +55,8 @@ VIDEO_BITRATES = {
             240: 300,
             360: 500,
             480: 1000,
-            720: 2500,
-            1080: 4500,
+            720: 8000,
+            1080: 8000,
             1440: 9000,
             2160: 18000,
         },
@@ -91,7 +91,7 @@ VIDEO_BITRATES = {
 
 AUDIO_ENCODERS = {"h264": "aac", "h265": "aac", "vp9": "libopus"}
 
-AUDIO_BITRATES = {"h264": 128, "h265": 128, "vp9": 96}
+AUDIO_BITRATES = {"h264": 192, "h265": 128, "vp9": 96}
 
 EXTENSIONS = {"h264": "mp4", "h265": "mp4", "vp9": "webm"}
 
