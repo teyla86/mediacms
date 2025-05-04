@@ -4,6 +4,7 @@
 import hashlib
 import json
 import os
+import re
 import random
 import shutil
 import subprocess
@@ -808,10 +809,36 @@ def verify_profile_eligibility(width, height, profile_resolution):
     if profile_resolution in [240, 360]:  # always get these two
         return True
     current_ar = round(width / height, 2)
-    if current_ar >= 1.78:  # 1.78 being 16/9; video AR being larger suggests cinemascope AR
+    if current_ar >= 1.78:  # 1.78 being 16/9; video AR being greater suggests cinemascope AR
         scaled_height = round((width / 16) * 9, 0)
         if -10 <= (scaled_height - profile_resolution) <= 10:
             return True
         return False
     else:
         return False
+
+
+def get_original_volume(media_path):
+    """retrieve volume of original file and calculate delta to allow equalising to target volume"""
+    volumedetect_cmd = f'ffmpeg -i {media_path} -filter:a volumedetect -f null /dev/null'
+    ffmpeg_volumedetect = run_command(volumedetect_cmd)
+    if not isinstance(ffmpeg_volumedetect, dict) or 'error' not in ffmpeg_volumedetect.keys():
+        return False, False
+    sterr = ffmpeg_volumedetect['error']
+    mean_volume_string = re.search("mean_volume:\\s(-?[0-9]\\d*(\\.\\d+)?)", str(sterr)).group()
+    mean_volume = float(re.search("(-?[0-9]\\d*(\\.\\d+)?)", mean_volume_string).group())
+    delta = round(settings.TARGET_VOLUME - mean_volume, 2)
+    if round(delta, 0) == 0:
+        return settings.TARGET_VOLUME, 0
+    else:
+        return mean_volume, delta
+
+
+def equalise_volume(old_path, new_path, volume_delta):
+    """use in combination with delta returned from helpers.get_original_volume to equalise
+    original media file to target volume"""
+    volume_cmd = f'ffmpeg -i {old_path} -vcodec copy -c:a aac -filter:a volume={str(volume_delta)}dB {new_path}'
+    ret = run_command(volume_cmd)
+    if 'out' not in ret.keys():
+        return ret
+    return True

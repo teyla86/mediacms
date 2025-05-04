@@ -441,7 +441,10 @@ class Media(models.Model):
                 self.produce_sprite_from_video()
             else:
                 self.produce_sprite_from_video()
-                self.encode()
+                if settings.FORCE_TARGET_VOLUME_ON_UPLOAD:
+                    self.equalise_volume(force_reencode=True)  # not explictly calling encode here to ensure file is equalised first
+                else:
+                    self.encode()
         elif self.media_type == "image":
             self.set_thumbnail(force=True)
         return True
@@ -677,6 +680,59 @@ class Media(models.Model):
         self.encoding_status = encoding_status
 
         return True
+
+    from django.core.files import File
+
+    def get_active_hls_file_dirs(self):
+        """locate directories containing active hls segments"""
+        if not self.encodings.all() or not self.hls_file:
+            return False
+        encs = sorted([e.profile.resolution for e in self.encodings.all()])
+        parent_path = "/".join(self.hls_file.split('/')[:-1])
+        with open(self.hls_file, 'r') as m3u8:
+            lines = m3u8.readlines()
+            stream_lines = [line for line in lines if '#EXT-X-STREAM-INF' in line]
+            path_lines = [lines[lines.index(line) + 1] for line in stream_lines]
+        res = {}
+        if stream_lines:
+            resolutions = sorted([int(line.split('x')[-1]) for line in stream_lines])
+            if not len(encs) == len(resolutions):
+                return False
+            for line in stream_lines:
+                this_enc = [str(encs[resolutions.index(r)]) for r in resolutions if str(r) in line][0]
+                res[this_enc] = File(parent_path + '/' + path_lines[stream_lines.index(line)].split('/')[0], this_enc)
+        return res
+
+    def equalise_volume(self, force_reencode=False):
+        """triggered through admin action; adjusts the volume of video media
+        to target volume defined in settings"""
+        if not helpers.get_file_type(self.media_file.path) == 'video':
+            return False
+        original_volume, volume_delta = helpers.get_original_volume(self.media_file.path)
+        if original_volume == settings.TARGET_VOLUME:
+            if force_reencode:
+                self.encode(force=True)
+            return True
+        elif not all([isinstance(original_volume, float), isinstance(volume_delta, float)]):
+            return False
+
+        from . import tasks
+
+        tasks.equalise.apply_async(args=[self.friendly_token, volume_delta, force_reencode], kwargs={}, priority=0)
+        return True
+
+    def reencode_after_equalising(self, force=False):
+        hls_dirs = self.get_active_hls_file_dirs()
+        if not hls_dirs and not force:
+            return True
+        if hls_dirs:
+            for res, dir in hls_dirs.items():
+                helpers.rm_dir(dir.file)
+        if helpers.rm_file(self.hls_file):
+            self.hls_file = ""
+            self.save()
+        [enc.delete() for enc in self.encodings.all()]
+        return self.encode(force=True)
 
     @property
     def encodings_info(self, full=False):

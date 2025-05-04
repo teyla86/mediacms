@@ -26,11 +26,13 @@ from .exceptions import VideoEncodingError
 from .helpers import (
     calculate_seconds,
     create_temp_file,
+    equalise_volume,
     get_file_name,
     get_file_type,
     media_file_info,
     produce_ffmpeg_commands,
     produce_friendly_token,
+    rm_dir,
     rm_file,
     run_command,
 )
@@ -150,6 +152,70 @@ class EncodingTask(Task):
         except BaseException:
             pass
         return False
+
+
+@task(
+    name="equalise",
+    base=EncodingTask,
+    bind=True,
+    queue="long_tasks",
+    soft_time_limit=settings.CELERY_SOFT_TIME_LIMIT,
+)
+def equalise(
+    self,
+    friendly_token,
+    delta,
+    force_reencode
+):
+    """Process an original media file to adjust its volume
+    to match the target volume configured in settings"""
+
+    try:
+        media = Media.objects.get(friendly_token=friendly_token)
+    except BaseException:
+        return False
+
+    logger.info(f"Equalising started; media: {media.title} ({media.id}), delta: {delta}")
+
+    file_path = media.media_file.path
+
+    TEMP_DIR = 'temp'
+
+    file_dir = "/".join(file_path.split('/')[:-1])
+    temp_dir = os.path.join(file_dir, TEMP_DIR)
+    try:
+        os.mkdir(temp_dir)
+    except FileExistsError:
+        pass
+    if not os.path.isdir(temp_dir):
+        return False
+
+    file_name, file_ext = os.path.splitext(file_path)
+    new_path = os.path.join(file_dir, TEMP_DIR, get_file_name(file_name) + file_ext)
+
+    def make_error(ret):
+        if 'error' not in ret.keys():
+            return ret
+        lines = ret['error'].split('\n')
+        cut_line = [line for line in lines if 'encoder' in line]
+        if not cut_line or len(cut_line) > 1 or cut_line[0] == lines[-1]:
+            return ret
+        error = lines[lines.index(cut_line[0]) + 1:]
+        return ', '.join(error)
+
+    ret = equalise_volume(file_path, new_path, delta)
+    if not isinstance(ret, bool):
+        new_path = None
+        err = make_error(ret)
+        logger.info(f"""Failed to equalise {media.title} ({file_path}): {err}""")
+    else:
+        shutil.move(new_path, file_path)
+        logger.info(f"""Equalised {media.title} ({file_path})""")
+        media.reencode_after_equalising(force=force_reencode)
+
+    rm_dir(temp_dir)
+
+    return bool(new_path)
 
 
 @task(
